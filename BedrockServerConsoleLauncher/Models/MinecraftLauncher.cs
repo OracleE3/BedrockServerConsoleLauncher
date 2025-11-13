@@ -1,4 +1,5 @@
-﻿using Ionic.Zip;
+﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,6 +9,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Policy;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,8 +22,10 @@ namespace MinecraftLauncherConsole.Models
         #region PRIVATE_MEMBERS
         private List<Process> _ServerList { get; set; }
         private readonly Regex _VersionRegex = new Regex(@"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+");
-        private readonly Regex _LatestDownloadableURLRegex = new Regex(@"https://minecraft\.azureedge\.net/bin-win/bedrock-server-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.zip");
+        // https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.95.1.zip
+        private readonly Regex _LatestDownloadableURLRegex = new Regex(@"https://www\.minecraft\.net/bedrockdedicatedserver/bin-(?'platform'\w+-?\w+?)?/(?'file_name'bedrock-server-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+.zip)");
         private readonly HttpClient _WebClient;
+        private readonly string _Platform;
         private Process _Server { get; set; }
         private List<string> _ValidCommands = new List<string>()
         {
@@ -62,14 +66,28 @@ namespace MinecraftLauncherConsole.Models
             _WebClient.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
             _WebClient.DefaultRequestHeaders.Add("Pragma", "no-cache");
             _WebClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko; Google Page Speed Insights) Chrome/27.0.1453 Safari/537.36");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                _Platform = (Config.Preview ? "Preview" : "") + "Windows";
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                _Platform = (Config.Preview ? "Preview" : "") + "Linux";
+            }
         }
 
         async public Task<Tuple<Version, string>> CheckAvailableVersion()
         {
-            var webpage = await GetUrlString(Config.DownloadPage);
-            var downloadableUrl = _LatestDownloadableURLRegex.Match(webpage).Value;
-            var latestVersion = new Version(_VersionRegex.Match(downloadableUrl).Value);
-            return new Tuple<Version, string>(latestVersion, downloadableUrl);
+            var versionJson = await GetUrlString(Config.DownloadPage);
+            var linksJson = ((JObject)JsonConvert.DeserializeObject(versionJson))["result"]["links"];
+            var downloadableUrls = ((JArray)linksJson)
+                .ToObject<List<Dictionary<string, string>>>()
+                .ToDictionary(
+                    o => o["downloadType"].Replace("serverBedrock", ""),
+                    o => o["downloadUrl"]
+                );
+            var latestURL = downloadableUrls[_Platform];
+            return new Tuple<Version, string>(new Version(_VersionRegex.Match(latestURL).Value), latestURL);
         }
         public async Task<ZipArchive> DownloadZipFile(string url)
         {
@@ -86,7 +104,7 @@ namespace MinecraftLauncherConsole.Models
             {
                 Directory.CreateDirectory(latestInstallPath);
             }
-            var serverPackage = await DownloadZipFile(latestUrl);
+            var serverPackage = await DownloadZipFile(versionAndUrl.Item2);
             var baseNames = new HashSet<string>();
             foreach (var entry in serverPackage.Entries)
             {

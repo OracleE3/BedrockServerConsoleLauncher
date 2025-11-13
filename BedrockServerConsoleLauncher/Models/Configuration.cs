@@ -12,5 +12,6 @@ namespace MinecraftLauncherConsole.Models
         public List<string> PreserveFiles { get; set; }
         public string TargetDir { get; set; }
         public string WorldName { get; set; }
+        public bool Preview { get; set; }
     }
 }
